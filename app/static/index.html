@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Affiliate Content Studio</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2129; --muted:#6b7280; --line:#e5e7eb;
+          --accent:#ee4d2d; --ok:#16a34a; --err:#dc2626; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, "Noto Sans Thai", Tahoma, sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:14px 16px; }
+  header h1 { margin:0; font-size:20px; }
+  main { max-width:1100px; margin:0 auto; padding:16px; display:grid; gap:16px;
+         grid-template-columns: 340px 1fr; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  h2 { font-size:16px; margin:0 0 12px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
+  input, select, textarea { width:100%; padding:8px 10px; border:1px solid var(--line);
+         border-radius:6px; font:inherit; background:#fff; color:inherit; }
+  textarea { min-height:70px; resize:vertical; }
+  button { font:inherit; border:0; border-radius:6px; padding:8px 14px; cursor:pointer;
+           background:var(--accent); color:#fff; }
+  button.secondary { background:#fff; color:var(--text); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+  .product { display:grid; grid-template-columns: 220px 1fr; gap:16px; }
+  @media (max-width: 600px) { .product { grid-template-columns: 1fr; } }
+  .thumbs { display:flex; gap:4px; flex-wrap:wrap; }
+  .thumbs img { width:52px; height:52px; object-fit:cover; border-radius:4px; border:1px solid var(--line); }
+  video { width:100%; max-width:220px; border-radius:8px; background:#000; aspect-ratio:9/16; }
+  .badge { font-size:12px; padding:2px 8px; border-radius:99px; background:#eef; }
+  .badge.done { background:#dcfce7; color:var(--ok); }
+  .badge.error { background:#fee2e2; color:var(--err); }
+  .badge.processing { background:#fef9c3; color:#854d0e; }
+  .err { color:var(--err); font-size:13px; white-space:pre-wrap; }
+  .muted { color:var(--muted); font-size:13px; }
+  .list { display:grid; gap:16px; }
+</style>
+</head>
+<body>
+<header><h1>Affiliate Content Studio</h1></header>
+<main>
+  <section class="card">
+    <h2>เพิ่มสินค้า</h2>
+    <form id="addForm">
+      <label>แพลตฟอร์ม</label>
+      <select name="platform">
+        <option value="shopee">Shopee</option>
+        <option value="tiktok_shop">TikTok Shop</option>
+      </select>
+      <label>ชื่อสินค้า *</label>
+      <input name="name" required>
+      <label>ราคา</label>
+      <input name="price" placeholder="เช่น 199 บาท">
+      <label>จุดเด่นสินค้า</label>
+      <textarea name="highlights" placeholder="ใส่ข้อมูลจริงของสินค้า AI จะใช้เฉพาะข้อมูลนี้"></textarea>
+      <label>ลิงก์ affiliate</label>
+      <input name="affiliate_link" placeholder="https://s.shopee.co.th/...">
+      <label>รูปสินค้า * (เลือกได้หลายรูป)</label>
+      <input name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple required>
+      <div class="row"><button type="submit">บันทึกสินค้า</button></div>
+      <div id="addErr" class="err"></div>
+    </form>
+  </section>
+
+  <section>
+    <div id="list" class="list"></div>
+  </section>
+</main>
+
+<script>
+const PLATFORM = { shopee: "Shopee", tiktok_shop: "TikTok Shop" };
+const STATUS = { new: "ยังไม่สร้าง", processing: "กำลังสร้าง…", done: "เสร็จแล้ว", error: "ผิดพลาด" };
+let pollTimer = null;
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+  return data;
+}
+
+function contentForm(p) {
+  const c = p.content;
+  if (!c) return `<p class="muted">กด "ให้ AI สร้างคอนเทนต์" เพื่อเริ่ม</p>`;
+  return `
+    <label>Hook (ข้อความบนคลิป 3 วินาทีแรก)</label>
+    <input data-f="hook" value="${esc(c.hook)}">
+    <label>สคริปต์เสียงพากย์</label>
+    <textarea data-f="voice_script">${esc(c.voice_script)}</textarea>
+    <label>แคปชัน Facebook</label>
+    <textarea data-f="caption_facebook">${esc(c.caption_facebook)}</textarea>
+    <label>แคปชัน TikTok</label>
+    <textarea data-f="caption_tiktok">${esc(c.caption_tiktok)}</textarea>
+    <label>แฮชแท็ก (คั่นด้วยเว้นวรรค)</label>
+    <input data-f="hashtags" value="${esc((c.hashtags || []).join(" "))}">
+    <div class="row">
+      <button class="secondary" data-act="copy" data-src="caption_facebook">คัดลอกแคปชัน FB</button>
+      <button class="secondary" data-act="copy" data-src="caption_tiktok">คัดลอกแคปชัน TikTok</button>
+      <button class="secondary" data-act="save">บันทึกที่แก้ + ทำวิดีโอใหม่</button>
+    </div>`;
+}
+
+function card(p) {
+  const busy = p.status === "processing";
+  return `
+  <article class="card" data-id="${p.id}">
+    <div class="product">
+      <div>
+        ${p.video_url ? `<video src="${p.video_url}?t=${Date.now()}" controls playsinline></video>` :
+          `<div class="thumbs">${p.image_urls.map(u => `<img src="${u}" alt="">`).join("")}</div>`}
+        <div class="row">
+          ${p.video_url ? `<a href="${p.video_url}" download="product-${p.id}.mp4"><button class="secondary">ดาวน์โหลดวิดีโอ</button></a>` : ""}
+        </div>
+      </div>
+      <div>
+        <h2>${esc(p.name)}</h2>
+        <div class="row" style="margin-top:0">
+          <span class="badge">${PLATFORM[p.platform] || esc(p.platform)}</span>
+          <span class="badge ${p.status}">${STATUS[p.status] || p.status}</span>
+          ${p.price ? `<span class="muted">${esc(p.price)}</span>` : ""}
+        </div>
+        ${p.error ? `<p class="err">${esc(p.error)}</p>` : ""}
+        <div class="row">
+          <button data-act="generate" ${busy ? "disabled" : ""}>${p.content ? "ให้ AI สร้างใหม่" : "ให้ AI สร้างคอนเทนต์"}</button>
+          <button class="secondary" data-act="delete" ${busy ? "disabled" : ""}>ลบ</button>
+        </div>
+        ${contentForm(p)}
+      </div>
+    </div>
+  </article>`;
+}
+
+async function load() {
+  const items = await api("/api/products");
+  document.getElementById("list").innerHTML =
+    items.length ? items.map(card).join("") : `<div class="card muted">ยังไม่มีสินค้า เพิ่มสินค้าทางซ้ายได้เลย</div>`;
+  clearTimeout(pollTimer);
+  if (items.some(p => p.status === "processing")) pollTimer = setTimeout(load, 3000);
+}
+
+document.getElementById("addForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const form = e.target, err = document.getElementById("addErr");
+  err.textContent = "";
+  try {
+    await api("/api/products", { method: "POST", body: new FormData(form) });
+    form.reset();
+    load();
+  } catch (x) { err.textContent = x.message; }
+});
+
+document.getElementById("list").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const art = btn.closest("article"), id = art.dataset.id, act = btn.dataset.act;
+  const field = f => art.querySelector(`[data-f="${f}"]`)?.value ?? "";
+  try {
+    if (act === "generate") {
+      await api(`/api/products/${id}/generate`, { method: "POST" });
+    } else if (act === "delete") {
+      if (!confirm("ลบสินค้านี้และไฟล์ทั้งหมด?")) return;
+      await api(`/api/products/${id}`, { method: "DELETE" });
+    } else if (act === "copy") {
+      const text = field(btn.dataset.src) + "\n\n" + field("hashtags");
+      await navigator.clipboard.writeText(text.trim());
+      btn.textContent = "คัดลอกแล้ว ✓";
+      return;
+    } else if (act === "save") {
+      await api(`/api/products/${id}/content`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hook: field("hook"),
+          voice_script: field("voice_script"),
+          caption_facebook: field("caption_facebook"),
+          caption_tiktok: field("caption_tiktok"),
+          hashtags: field("hashtags").split(/\s+/).filter(Boolean),
+        }),
+      });
+    }
+    load();
+  } catch (x) { alert(x.message); }
+});
+
+load();
+</script>
+</body>
+</html>
