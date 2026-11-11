@@ -1,5 +1,6 @@
 """เว็บแอปสร้างคอนเทนต์ affiliate: แคปชัน + เสียงพากย์ + วิดีโอสไลด์"""
 import asyncio
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -11,7 +12,7 @@ load_dotenv()
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
-from pydantic import BaseModel  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 
 from . import ai, db, tts, video  # noqa: E402
 
@@ -26,6 +27,12 @@ db.init()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=db.DATA_DIR), name="media")
+
+
+def ai_enabled() -> bool:
+    """มี ANTHROPIC_API_KEY จริงหรือไม่ (ค่าตัวอย่างจาก .env.example ไม่นับ)"""
+    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    return bool(key) and key != "sk-ant-..."
 
 
 def media_url(path: str | None) -> str | None:
@@ -74,6 +81,11 @@ def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/api/config")
+def config():
+    return {"ai_enabled": ai_enabled()}
+
+
 @app.get("/api/products")
 def list_products():
     return [to_public(p) for p in db.list_products()]
@@ -119,6 +131,8 @@ async def create_product(
 @app.post("/api/products/{pid}/generate")
 def generate(pid: int, background: BackgroundTasks):
     """ให้ AI คิดคอนเทนต์ใหม่ทั้งหมด แล้วทำเสียง + วิดีโอ"""
+    if not ai_enabled():
+        raise HTTPException(400, "ยังไม่ได้ตั้งค่า ANTHROPIC_API_KEY ในไฟล์ .env (เขียนคอนเทนต์เองได้ในช่องด้านล่าง)")
     if not db.get_product(pid):
         raise HTTPException(404, "ไม่พบสินค้า")
     db.update_product(pid, status="processing", error=None)
@@ -127,18 +141,20 @@ def generate(pid: int, background: BackgroundTasks):
 
 
 class ContentEdit(BaseModel):
-    hook: str
-    voice_script: str
-    caption_facebook: str
-    caption_tiktok: str
-    hashtags: list[str]
+    hook: str = ""
+    voice_script: str = Field(min_length=1)
+    caption_facebook: str = ""
+    caption_tiktok: str = ""
+    hashtags: list[str] = []
 
 
 @app.put("/api/products/{pid}/content")
 def save_content(pid: int, body: ContentEdit, background: BackgroundTasks):
-    """บันทึกคอนเทนต์ที่แก้เอง แล้วทำเสียง + วิดีโอใหม่ (ไม่เรียก AI)"""
+    """บันทึกคอนเทนต์ที่เขียน/แก้เอง แล้วทำเสียง + วิดีโอ (ไม่เรียก AI)"""
     if not db.get_product(pid):
         raise HTTPException(404, "ไม่พบสินค้า")
+    if not body.voice_script.strip():
+        raise HTTPException(400, "ต้องใส่สคริปต์เสียงพากย์ก่อนทำวิดีโอ")
     db.update_product(pid, content=body.model_dump(), status="processing", error=None)
     background.add_task(run_pipeline, pid, False)
     return {"ok": True}

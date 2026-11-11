@@ -75,6 +75,7 @@
 const PLATFORM = { shopee: "Shopee", tiktok_shop: "TikTok Shop" };
 const STATUS = { new: "ยังไม่สร้าง", processing: "กำลังสร้าง…", done: "เสร็จแล้ว", error: "ผิดพลาด" };
 let pollTimer = null;
+let aiEnabled = false;
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -83,14 +84,21 @@ function esc(s) {
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const msg = typeof data.detail === "string" ? data.detail
+      : res.status === 422 ? "ข้อมูลไม่ครบ: ต้องใส่สคริปต์เสียงพากย์" : `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
   return data;
 }
 
 function contentForm(p) {
-  const c = p.content;
-  if (!c) return `<p class="muted">กด "ให้ AI สร้างคอนเทนต์" เพื่อเริ่ม</p>`;
-  return `
+  const c = p.content || { hook: "", voice_script: "", caption_facebook: "", caption_tiktok: "", hashtags: [] };
+  const busy = p.status === "processing";
+  const hint = p.content ? "" : `<p class="muted">${aiEnabled
+    ? 'กด "ให้ AI สร้างคอนเทนต์" หรือเขียนเองในช่องด้านล่าง แล้วกด "บันทึก + ทำเสียงและวิดีโอ"'
+    : 'เขียนคอนเทนต์เองในช่องด้านล่าง (อย่างน้อยต้องมีสคริปต์เสียงพากย์) แล้วกด "บันทึก + ทำเสียงและวิดีโอ"'}</p>`;
+  return `${hint}
     <label>Hook (ข้อความบนคลิป 3 วินาทีแรก)</label>
     <input data-f="hook" value="${esc(c.hook)}">
     <label>สคริปต์เสียงพากย์</label>
@@ -104,7 +112,7 @@ function contentForm(p) {
     <div class="row">
       <button class="secondary" data-act="copy" data-src="caption_facebook">คัดลอกแคปชัน FB</button>
       <button class="secondary" data-act="copy" data-src="caption_tiktok">คัดลอกแคปชัน TikTok</button>
-      <button class="secondary" data-act="save">บันทึกที่แก้ + ทำวิดีโอใหม่</button>
+      <button class="secondary" data-act="save" ${busy ? "disabled" : ""}>บันทึก + ทำเสียงและวิดีโอ</button>
     </div>`;
 }
 
@@ -129,7 +137,7 @@ function card(p) {
         </div>
         ${p.error ? `<p class="err">${esc(p.error)}</p>` : ""}
         <div class="row">
-          <button data-act="generate" ${busy ? "disabled" : ""}>${p.content ? "ให้ AI สร้างใหม่" : "ให้ AI สร้างคอนเทนต์"}</button>
+          ${aiEnabled ? `<button data-act="generate" ${busy ? "disabled" : ""}>${p.content ? "ให้ AI สร้างใหม่" : "ให้ AI สร้างคอนเทนต์"}</button>` : ""}
           <button class="secondary" data-act="delete" ${busy ? "disabled" : ""}>ลบ</button>
         </div>
         ${contentForm(p)}
@@ -190,7 +198,10 @@ document.getElementById("list").addEventListener("click", async e => {
   } catch (x) { alert(x.message); }
 });
 
-load();
+api("/api/config")
+  .then(cfg => { aiEnabled = cfg.ai_enabled; })
+  .catch(() => {})
+  .finally(load);
 </script>
 </body>
 </html>
